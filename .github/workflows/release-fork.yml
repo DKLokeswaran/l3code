@@ -1,0 +1,197 @@
+name: l3code release
+
+# Personal fork release train. Builds unsigned Windows (NSIS) and Debian (deb)
+# desktop apps from `personal/main` on free GitHub-hosted runners and
+# publishes them to this fork's releases, which is what the in-app updater
+# checks. Upstream's release.yml is untouched.
+#
+# Version scheme is 0.YYYYMMDD.RUN_NUMBER: plain semver (so the updater treats
+# it as the `latest` channel), monotonically increasing, and never
+# colliding with upstream's 1.x line.
+
+on:
+  push:
+    branches:
+      - personal/main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: l3code-desktop-release
+  cancel-in-progress: true
+
+jobs:
+  version:
+    name: Resolve fork version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - id: resolve
+        run: |
+          set -euo pipefail
+          stamp="$(date -u +%Y%m%d)"
+          version="0.${stamp}.${GITHUB_RUN_NUMBER}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=l3code-v${version}" >> "$GITHUB_OUTPUT"
+
+  build-windows:
+    name: Build Windows x64 (NSIS)
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 120
+    env:
+      FORK_VERSION: ${{ needs.version.outputs.version }}
+      # l3code brand: separate install identity, data dir, taskbar id, and
+      # updater feed from stock T3 Code. Keep APP_ID consistent with the
+      # runtime mapping in apps/desktop/src/app/DesktopBrand.ts.
+      T3CODE_DESKTOP_APP_ID: com.l3code.desktop
+      T3CODE_DESKTOP_PRODUCT_NAME: l3code
+      T3CODE_DESKTOP_EXECUTABLE_NAME: l3code
+      T3CODE_DESKTOP_ARTIFACT_PREFIX: l3code
+      T3CODE_DESKTOP_PACKAGE_NAME: l3code
+      T3CODE_DESKTOP_BRAND_SLUG: l3code
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        shell: bash
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      # The artifact preflight hard-requires these libs, but servicing VS
+      # hangs often on hosted runners, so only service when actually
+      # missing (same probe the preflight uses).
+      - name: Install Spectre-mitigated MSVC libs if missing
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installPath = & $vswhere -products * -latest -property installationPath
+          $toolset = Get-ChildItem "$installPath\VC\Tools\MSVC" -Directory | Sort-Object { [version]$_.Name } -Descending | Select-Object -First 1
+          if ($toolset -and (Test-Path (Join-Path $toolset.FullName 'lib\spectre\x64'))) {
+            Write-Output "Spectre libs already present, skipping VS servicing."
+            exit 0
+          }
+          Write-Output "Spectre libs missing, servicing VS installation..."
+          $setupExe = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\setup.exe"
+          $proc = Start-Process -FilePath $setupExe `
+            -ArgumentList "modify", "--installPath", "`"${installPath}`"", "--add", `
+            "Microsoft.VisualStudio.Component.VC.Runtimes.x86.x64.Spectre", "--quiet", "--norestart" `
+            -Wait -PassThru
+          if ($proc.ExitCode -ne 0 -and $proc.ExitCode -ne 3010) { exit $proc.ExitCode }
+
+      - name: Align package versions to fork version
+        shell: bash
+        run: node scripts/update-release-package-versions.ts "$FORK_VERSION"
+
+      - name: Build Windows artifact
+        shell: bash
+        run: node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64 --build-version "$FORK_VERSION" --verbose
+
+      - name: Upload Windows assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: fork-assets-win
+          path: release/
+          if-no-files-found: error
+
+  build-linux:
+    name: Build Linux x64 (deb)
+    needs: version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+    env:
+      FORK_VERSION: ${{ needs.version.outputs.version }}
+      # l3code brand: separate install identity, data dir, taskbar id, and
+      # updater feed from stock T3 Code. Keep APP_ID consistent with the
+      # runtime mapping in apps/desktop/src/app/DesktopBrand.ts.
+      T3CODE_DESKTOP_APP_ID: com.l3code.desktop
+      T3CODE_DESKTOP_PRODUCT_NAME: l3code
+      T3CODE_DESKTOP_EXECUTABLE_NAME: l3code
+      T3CODE_DESKTOP_ARTIFACT_PREFIX: l3code
+      T3CODE_DESKTOP_PACKAGE_NAME: l3code
+      T3CODE_DESKTOP_BRAND_SLUG: l3code
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            /*
+            !/.repos/
+          sparse-checkout-cone-mode: false
+
+      - name: Install Linux build prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y build-essential libsecret-1-dev pkg-config imagemagick
+          cargo --version
+          rustc --version
+
+      - name: Setup Vite+
+        uses: voidzero-dev/setup-vp@v1
+        with:
+          node-version-file: package.json
+          cache: true
+          run-install: true
+
+      - name: Ensure Electron runtime is installed
+        run: vp run --filter @t3tools/desktop ensure:electron
+
+      - name: Align package versions to fork version
+        run: node scripts/update-release-package-versions.ts "$FORK_VERSION"
+
+      - name: Build Linux artifact
+        run: node scripts/build-desktop-artifact.ts --platform linux --target deb --arch x64 --build-version "$FORK_VERSION" --verbose
+
+      - name: Upload Linux assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: fork-assets-linux
+          path: release/
+          if-no-files-found: error
+
+  publish:
+    name: Publish fork release
+    needs: [version, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download all assets
+        uses: actions/download-artifact@v4
+        with:
+          pattern: fork-assets-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Drop debug-only manifests
+        run: rm -f release-assets/builder-debug.yml && ls -la release-assets
+
+      - name: Create fork release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: l3code ${{ needs.version.outputs.version }}
+          body: |
+            Automated l3code desktop build from personal/main (${{ github.sha }}).
+            Windows (NSIS, unsigned) + Debian (deb, unsigned).
+            Install once, then use in-app Check for updates from here on.
+          files: release-assets/*
+          draft: false
+          prerelease: false
