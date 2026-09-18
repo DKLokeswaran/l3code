@@ -1,0 +1,55 @@
+name: Sync fork main from upstream
+
+# Keeps l3code `main` tracking pingdotgg/t3code `main` with a daily merge.
+# Personal work lives on `personal/main`; merge `main` into it manually.
+# This job only ever touches `main`, never your personal branches.
+
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-fork-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge upstream/main into main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream
+        run: |
+          set -euo pipefail
+          git config user.name "l3code-sync[bot]"
+          git config user.email "l3code-sync[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/pingdotgg/t3code.git 2>/dev/null || true
+          git fetch upstream main --tags --prune
+          head_sha="$(git rev-parse HEAD)"
+          upstream_sha="$(git rev-parse upstream/main)"
+          if test "$head_sha" = "$upstream_sha"; then
+            echo "main already matches upstream/main ($head_sha)."
+            exit 0
+          fi
+          base="$(git merge-base HEAD upstream/main)"
+          if test "$base" = "$head_sha"; then
+            git merge --ff-only upstream/main
+            echo "Fast-forwarded main to $upstream_sha."
+          else
+            # main carries l3code-only commits (e.g. this workflow); merge instead.
+            git merge --no-edit upstream/main
+            echo "Merged upstream/main into main."
+          fi
+
+      - name: Push main
+        run: git push origin HEAD:main
