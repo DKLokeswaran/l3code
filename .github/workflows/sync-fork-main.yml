@@ -1,0 +1,110 @@
+name: l3code sync
+
+# Keeps l3code `main` tracking pingdotgg/t3code `main` with a daily merge.
+# A second job then merges `main` into `personal/main` (which kicks off the
+# fork desktop build). The merge is all-or-nothing: on conflict it aborts
+# and fails loudly, leaving `personal/main` untouched for a manual fix.
+
+on:
+  schedule:
+    # 14:30 UTC (20:00 IST) crests the quiet window: sweeps up the full US
+    # workday's output in one run so the desktop build stays fresh all day.
+    - cron: "30 14 * * *"
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  # Needed to explicitly start the fork desktop build after the bot's own
+  # push (bot pushes never cascade into other workflows by themselves).
+  actions: write
+
+concurrency:
+  group: sync-fork-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Merge upstream/main into main
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Merge upstream
+        run: |
+          set -euo pipefail
+          git config user.name "l3code-sync[bot]"
+          git config user.email "l3code-sync[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/pingdotgg/t3code.git 2>/dev/null || true
+          git fetch upstream main --tags --prune
+          head_sha="$(git rev-parse HEAD)"
+          upstream_sha="$(git rev-parse upstream/main)"
+          if test "$head_sha" = "$upstream_sha"; then
+            echo "main already matches upstream/main ($head_sha)."
+            exit 0
+          fi
+          base="$(git merge-base HEAD upstream/main)"
+          if test "$base" = "$head_sha"; then
+            git merge --ff-only upstream/main
+            echo "Fast-forwarded main to $upstream_sha."
+          else
+            # main carries l3code-only commits (e.g. this workflow); merge instead.
+            git merge --no-edit upstream/main
+            echo "Merged upstream/main into main."
+          fi
+
+      - name: Push main
+        run: git push origin HEAD:main
+
+  merge-personal:
+    name: Merge main into personal/main
+    needs: sync
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout personal/main
+        uses: actions/checkout@v6
+        with:
+          ref: personal/main
+          fetch-depth: 0
+
+      - name: Merge main into personal/main
+        id: merge
+        run: |
+          set -euo pipefail
+          git config user.name "l3code-sync[bot]"
+          git config user.email "l3code-sync[bot]@users.noreply.github.com"
+          git fetch origin main personal/main
+          if git merge-base --is-ancestor origin/main HEAD; then
+            echo "personal/main already contains main. Nothing to do."
+            echo "merged=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git merge --no-edit origin/main; then
+            echo "Merged main into personal/main cleanly."
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Conflict merging main into personal/main. Aborted; personal/main left untouched. Resolve it manually."
+            git merge --abort
+            exit 1
+          fi
+
+      - name: Push personal/main
+        if: steps.merge.outputs.merged == 'true'
+        run: git push origin HEAD:personal/main
+
+      # Bot pushes never cascade into other workflows, so start the fork
+      # desktop build explicitly. Human pushes to personal/main still build
+      # through release-fork.yml's own push trigger; this only covers the bot.
+      - name: Trigger fork desktop build
+        if: steps.merge.outputs.merged == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release-fork.yml --ref personal/main
