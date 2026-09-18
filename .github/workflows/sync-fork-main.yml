@@ -15,6 +15,9 @@ on:
 
 permissions:
   contents: write
+  # Needed to explicitly start the fork desktop build after the bot's own
+  # push (bot pushes never cascade into other workflows by themselves).
+  actions: write
 
 concurrency:
   group: sync-fork-main
@@ -71,6 +74,8 @@ jobs:
           fetch-depth: 0
 
       - name: Merge main into personal/main
+      - name: Merge main into personal/main
+        id: merge
         run: |
           set -euo pipefail
           git config user.name "l3code-sync[bot]"
@@ -78,10 +83,12 @@ jobs:
           git fetch origin main personal/main
           if git merge-base --is-ancestor origin/main HEAD; then
             echo "personal/main already contains main. Nothing to do."
+            echo "merged=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if git merge --no-edit origin/main; then
             echo "Merged main into personal/main cleanly."
+            echo "merged=true" >> "$GITHUB_OUTPUT"
           else
             echo "::error::Conflict merging main into personal/main. Aborted; personal/main left untouched. Resolve it manually."
             git merge --abort
@@ -89,4 +96,14 @@ jobs:
           fi
 
       - name: Push personal/main
+        if: steps.merge.outputs.merged == 'true'
         run: git push origin HEAD:personal/main
+
+      # Bot pushes never cascade into other workflows, so start the fork
+      # desktop build explicitly. Human pushes to personal/main still build
+      # through release-fork.yml's own push trigger; this only covers the bot.
+      - name: Trigger fork desktop build
+        if: steps.merge.outputs.merged == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release-fork.yml --ref personal/main
