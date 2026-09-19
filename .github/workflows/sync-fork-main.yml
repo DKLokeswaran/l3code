@@ -17,9 +17,6 @@ permissions:
   # Needed to explicitly start the fork desktop build after the bot's own
   # push (bot pushes never cascade into other workflows by themselves).
   actions: write
-  # Upstream changes can add or edit workflow files; without this the bot's
-  # push of main is rejected at the GitHub App boundary.
-  workflows: write
 
 concurrency:
   group: sync-fork-main
