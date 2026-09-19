@@ -10,9 +10,6 @@ on:
     # 14:30 UTC (20:00 IST) crests the quiet window: sweeps up the full US
     # workday's output in one run so the desktop build stays fresh all day.
     - cron: "30 14 * * *"
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:
@@ -42,6 +39,7 @@ jobs:
           set -euo pipefail
           git config user.name "l3code-sync[bot]"
           git config user.email "l3code-sync[bot]@users.noreply.github.com"
+          git config merge.ours.driver true
           git remote add upstream https://github.com/pingdotgg/t3code.git 2>/dev/null || true
           git fetch upstream main --tags --prune
           head_sha="$(git rev-parse HEAD)"
@@ -58,6 +56,16 @@ jobs:
             # main carries l3code-only commits (e.g. this workflow); merge instead.
             git merge --no-edit upstream/main
             echo "Merged upstream/main into main."
+          fi
+          # merge=ours cannot catch workflow files upstream ADDED (nothing
+          # existed on our side to keep). Restore the whole directory to the
+          # pre-merge state so the push never contains upstream workflow
+          # changes the GitHub App token is not allowed to touch.
+          if ! git diff --quiet ORIG_HEAD HEAD -- .github/workflows; then
+            git rm -r -q --ignore-unmatch .github/workflows
+            git checkout ORIG_HEAD -- .github/workflows
+            git commit --amend --no-edit
+            echo "Restored fork workflow files after upstream merge."
           fi
 
       - name: Push main

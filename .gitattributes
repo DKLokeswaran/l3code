@@ -3,3 +3,5 @@
 # Batch files need CRLF for cmd.exe to parse them reliably.
 *.cmd text eol=crlf
 *.bat text eol=crlf
+# Fork workflows are authoritative; upstream workflow changes are ignored on merge.
+.github/workflows/* merge=ours
