@@ -64,7 +64,6 @@ const DesktopConnectionCatalogStoreMigrationOperation = Schema.Literals([
 const DesktopConnectionCatalogStoreProtectionOperation = Schema.Literals([
   "check-encryption-availability",
   "encrypt-catalog",
-  "decrypt-catalog",
 ]);
 
 export class DesktopConnectionCatalogStoreWriteError extends Schema.TaggedError<DesktopConnectionCatalogStoreWriteError>()(
@@ -105,18 +104,6 @@ export class DesktopConnectionCatalogStoreReadError extends Schema.TaggedError<D
   }
 }
 
-export class DesktopConnectionCatalogStoreDocumentDecodeError extends Schema.TaggedError<DesktopConnectionCatalogStoreDocumentDecodeError>()(
-  "DesktopConnectionCatalogStoreDocumentDecodeError",
-  {
-    catalogPath: Schema.String,
-    cause: Schema.Defect(),
-  },
-) {
-  override get message(): string {
-    return `Failed to decode the desktop connection catalog document at ${this.catalogPath}.`;
-  }
-}
-
 export class DesktopConnectionCatalogStoreMigrationError extends Schema.TaggedError<DesktopConnectionCatalogStoreMigrationError>()(
   "DesktopConnectionCatalogStoreMigrationError",
   {
@@ -152,8 +139,6 @@ export class DesktopConnectionCatalogStore extends Context.Service<
     readonly get: Effect.Effect<
       Option.Option<string>,
       | DesktopConnectionCatalogStoreReadError
-      | DesktopConnectionCatalogStoreDocumentDecodeError
-      | DesktopConnectionCatalogStoreDecodeError
       | DesktopConnectionCatalogStoreMigrationError
       | DesktopConnectionCatalogStoreProtectionError
     >;
@@ -183,13 +168,10 @@ function decodeSecretBytes(
   );
 }
 
-const readDocument = (
+const readRawDocument = (
   fileSystem: FileSystem.FileSystem,
   catalogPath: string,
-): Effect.Effect<
-  Option.Option<EncryptedConnectionCatalogDocument>,
-  DesktopConnectionCatalogStoreReadError | DesktopConnectionCatalogStoreDocumentDecodeError
-> =>
+): Effect.Effect<string | null, DesktopConnectionCatalogStoreReadError> =>
   fileSystem.readFileString(catalogPath).pipe(
     Effect.catch((error) =>
       error.reason._tag === "NotFound"
@@ -199,20 +181,6 @@ const readDocument = (
               catalogPath,
               cause: error,
             }),
-          ),
-    ),
-    Effect.flatMap((raw) =>
-      raw === null
-        ? Effect.succeed(Option.none<EncryptedConnectionCatalogDocument>())
-        : decodeEncryptedConnectionCatalogDocumentJson(raw).pipe(
-            Effect.map(Option.some),
-            Effect.mapError(
-              (cause) =>
-                new DesktopConnectionCatalogStoreDocumentDecodeError({
-                  catalogPath,
-                  cause,
-                }),
-            ),
           ),
     ),
   );
@@ -384,7 +352,7 @@ export const make = Effect.gen(function* () {
   const safeStorage = yield* ElectronSafeStorage.ElectronSafeStorage;
   const crypto = yield* Crypto.Crypto;
   const savedEnvironments = yield* DesktopSavedEnvironments.DesktopSavedEnvironments;
-  const catalogPath = path.join(environment.stateDir, "connection-catalog.json");
+  const catalogPath = environment.connectionCatalogPath;
   const encryptionAvailable = safeStorage.isEncryptionAvailable.pipe(
     Effect.mapError(
       (cause) =>
@@ -473,28 +441,46 @@ export const make = Effect.gen(function* () {
 
   return DesktopConnectionCatalogStore.of({
     get: Effect.gen(function* () {
-      const document = yield* readDocument(fileSystem, catalogPath);
-      if (Option.isNone(document)) {
+      const raw = yield* readRawDocument(fileSystem, catalogPath);
+      if (raw === null) {
         return yield* migrateLegacyCatalog;
+      }
+      // An unreadable payload - another desktop build's safeStorage key, a
+      // rotated key, or corruption - is treated as absent, never as fatal.
+      // This read gates every connection-state atom, so failing here blanks the
+      // whole UI. The file stays in place for its owner; the next successful
+      // write replaces it.
+      const ignoreUnreadable = <A>(stage: "document" | "secret" | "decrypt", cause: unknown) =>
+        Effect.logWarning(
+          "Ignoring a desktop connection catalog this app cannot read; leaving the file in place.",
+          { catalogPath, stage, cause },
+        ).pipe(Effect.as(Option.none<A>()));
+      const document = yield* decodeEncryptedConnectionCatalogDocumentJson(raw).pipe(
+        Effect.asSome,
+        Effect.catch((cause) =>
+          ignoreUnreadable<EncryptedConnectionCatalogDocument>("document", cause),
+        ),
+      );
+      if (Option.isNone(document)) {
+        return Option.none<string>();
       }
       if (!(yield* encryptionAvailable)) {
         return Option.none<string>();
       }
-      const decrypted = yield* decodeSecretBytes(catalogPath, document.value.encryptedCatalog).pipe(
-        Effect.flatMap((encryptedCatalog) =>
-          safeStorage.decryptString(encryptedCatalog).pipe(
-            Effect.mapError(
-              (cause) =>
-                new DesktopConnectionCatalogStoreProtectionError({
-                  operation: "decrypt-catalog",
-                  catalogPath,
-                  cause,
-                }),
-            ),
-          ),
-        ),
+      const encryptedCatalog = yield* decodeSecretBytes(
+        catalogPath,
+        document.value.encryptedCatalog,
+      ).pipe(
+        Effect.asSome,
+        Effect.catch((cause) => ignoreUnreadable<Uint8Array>("secret", cause)),
       );
-      return Option.some(decrypted);
+      if (Option.isNone(encryptedCatalog)) {
+        return Option.none<string>();
+      }
+      return yield* safeStorage.decryptString(encryptedCatalog.value).pipe(
+        Effect.asSome,
+        Effect.catch((cause) => ignoreUnreadable<string>("decrypt", cause)),
+      );
     }).pipe(Effect.withSpan("desktop.connectionCatalogStore.get")),
     set: Effect.fn("desktop.connectionCatalogStore.set")(function* (catalog) {
       if (!(yield* encryptionAvailable)) {

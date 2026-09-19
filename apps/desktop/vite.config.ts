@@ -18,6 +18,9 @@ const publicConfigDefine = {
   __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: JSON.stringify(
     repoEnv.T3CODE_CLERK_PUBLISHABLE_KEY?.trim() ?? "",
   ),
+  // Fork brand slug baked into the main bundle (see DesktopBrand.ts).
+  // Empty means stock upstream identity.
+  __T3CODE_DESKTOP_BRAND_SLUG__: JSON.stringify(repoEnv.T3CODE_DESKTOP_BRAND_SLUG?.trim() ?? ""),
 };
 
 export default defineConfig({

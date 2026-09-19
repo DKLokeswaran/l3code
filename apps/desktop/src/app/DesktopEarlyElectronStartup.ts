@@ -9,6 +9,7 @@ import {
   type LinuxPasswordStoreSwitch,
   type LinuxPasswordStorePreference,
 } from "../linuxSecretStorage.ts";
+import { DESKTOP_BRAND_NAMES } from "./DesktopBrand.ts";
 import {
   resolveDesktopBaseDir,
   resolveDesktopStateDir,
@@ -32,7 +33,9 @@ export interface EarlyLinuxElectronOptions {
 }
 
 export const resolveLinuxDesktopEntryName = (isDevelopment: boolean): string =>
-  isDevelopment ? "com.t3tools.T3Code.Development.desktop" : "com.t3tools.T3Code.desktop";
+  isDevelopment
+    ? "com.t3tools.T3Code.Development.desktop"
+    : DESKTOP_BRAND_NAMES.linuxDesktopEntryName;
 
 const trimNonEmpty = (value: string | undefined): string | null => {
   const trimmed = value?.trim();

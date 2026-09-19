@@ -69,6 +69,7 @@ describe("DesktopEnvironment", () => {
         environment.savedEnvironmentRegistryPath,
         "/tmp/t3/userdata/saved-environments.json",
       );
+      assert.equal(environment.connectionCatalogPath, "/tmp/t3/userdata/connection-catalog.json");
       assert.equal(environment.serverSettingsPath, "/tmp/t3/userdata/settings.json");
       assert.equal(environment.logDir, "/tmp/t3/userdata/logs");
       assert.equal(environment.browserArtifactsDir, "/tmp/t3/userdata/browser-artifacts");

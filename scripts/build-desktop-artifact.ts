@@ -919,6 +919,7 @@ interface ResolvedBuildOptions {
   readonly mockUpdates: boolean;
   readonly mockUpdateServerPort: number | undefined;
   readonly wslRuntime: string | undefined;
+  readonly brand: DesktopBrand;
 }
 
 interface StagePackageJson {
@@ -930,6 +931,8 @@ interface StagePackageJson {
   readonly packageManager: string;
   readonly description: string;
   readonly author: string;
+  // l3code: required for deb packaging (fpm); inert for other targets.
+  readonly homepage: string;
   readonly main: string;
   readonly build: Record<string, unknown>;
   readonly dependencies: Record<string, unknown>;
@@ -1553,7 +1556,56 @@ const BuildEnvConfig = Config.all({
   // by the build_linux_cli CI job. The Windows build embeds it verbatim as the
   // WSL runtime.
   wslRuntime: Config.String("T3CODE_DESKTOP_WSL_RUNTIME").pipe(Config.option),
+  // Optional fork brand overrides. Every one defaults to upstream identity,
+  // so unset values build byte-identical stock apps. The l3code release
+  // workflow sets all of them; see .github/workflows/release-fork.yml.
+  brandAppId: Config.String("T3CODE_DESKTOP_APP_ID").pipe(Config.option),
+  brandProductName: Config.String("T3CODE_DESKTOP_PRODUCT_NAME").pipe(Config.option),
+  brandExecutableName: Config.String("T3CODE_DESKTOP_EXECUTABLE_NAME").pipe(Config.option),
+  brandArtifactPrefix: Config.String("T3CODE_DESKTOP_ARTIFACT_PREFIX").pipe(Config.option),
+  brandPackageName: Config.String("T3CODE_DESKTOP_PACKAGE_NAME").pipe(Config.option),
 });
+
+// Fork brand for desktop builds. Upstream identity is the default; a fork
+// passes its own values through T3CODE_DESKTOP_* env (see BuildEnvConfig).
+export interface DesktopBrand {
+  readonly appId: string;
+  // Undefined means "use the version-derived stock product name".
+  readonly productName: string | undefined;
+  readonly executableName: string;
+  readonly artifactPrefix: string;
+  readonly packageName: string;
+}
+
+export const DEFAULT_DESKTOP_BRAND: DesktopBrand = {
+  appId: DESKTOP_APP_ID,
+  productName: undefined,
+  executableName: "t3code",
+  artifactPrefix: "T3-Code",
+  packageName: "t3code",
+};
+
+export function resolveDesktopBrand(env: {
+  readonly brandAppId: Option.Option<string>;
+  readonly brandProductName: Option.Option<string>;
+  readonly brandExecutableName: Option.Option<string>;
+  readonly brandArtifactPrefix: Option.Option<string>;
+  readonly brandPackageName: Option.Option<string>;
+}): DesktopBrand {
+  return {
+    appId: Option.getOrElse(env.brandAppId, () => DEFAULT_DESKTOP_BRAND.appId),
+    productName: Option.getOrUndefined(env.brandProductName),
+    executableName: Option.getOrElse(
+      env.brandExecutableName,
+      () => DEFAULT_DESKTOP_BRAND.executableName,
+    ),
+    artifactPrefix: Option.getOrElse(
+      env.brandArtifactPrefix,
+      () => DEFAULT_DESKTOP_BRAND.artifactPrefix,
+    ),
+    packageName: Option.getOrElse(env.brandPackageName, () => DEFAULT_DESKTOP_BRAND.packageName),
+  };
+}
 
 const MockUpdateServerPortSchema = Schema.NumberFromString.check(
   Schema.isInt(),
@@ -1647,6 +1699,8 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
   const wslRuntime =
     Option.getOrUndefined(input.wslRuntime) ?? Option.getOrUndefined(env.wslRuntime);
 
+  const brand = resolveDesktopBrand(env);
+
   return {
     platform,
     target,
@@ -1660,6 +1714,7 @@ export const resolveBuildOptions = Effect.fn("resolveBuildOptions")(function* (
     mockUpdates,
     mockUpdateServerPort,
     wslRuntime,
+    brand,
   } satisfies ResolvedBuildOptions;
 });
 
@@ -2636,11 +2691,16 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   // source file was never written fails the electron-builder step.
   wslRuntimeBundled = false,
   arch?: typeof BuildArch.Type,
+  // Fork brand. Defaults to upstream identity, so existing callers (and
+  // tests) that omit it build byte-identical stock apps.
+  brand: DesktopBrand = DEFAULT_DESKTOP_BRAND,
 ) {
   const buildConfig: Record<string, unknown> = {
-    appId: DESKTOP_APP_ID,
-    productName: resolveDesktopProductName(version),
-    artifactName: "T3-Code-${version}-${arch}.${ext}",
+    appId: brand.appId,
+    productName: brand.productName ?? resolveDesktopProductName(version),
+    // Plain string on purpose: electron-builder expands the ${...}
+    // placeholders itself at build time; a template literal would throw.
+    artifactName: brand.artifactPrefix + "-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
@@ -2734,9 +2794,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
   if (platform === "linux") {
     buildConfig.linux = {
       target: [target],
-      executableName: "t3code",
+      executableName: brand.executableName,
       icon: "icons",
       category: "Development",
+      // l3code: .deb packages require a maintainer; AppImage ignores this.
+      maintainer: "l3code <DKLokeswaran@users.noreply.github.com>",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
       // in the .desktop entry (Exec already gets %U), so browsers can hand
       // t3code:// OAuth callbacks to the app.
@@ -3635,14 +3697,18 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    name: options.brand.packageName,
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
     private: true,
     packageManager: rootPackageJson.packageManager,
     description: "T3 Code desktop build",
-    author: "T3 Tools",
+    // l3code: deb packaging (fpm) requires a homepage plus an author email.
+    // Other targets ignore both, so this is inert for them.
+    homepage: "https://github.com/DKLokeswaran/l3code",
+    author:
+      options.target === "deb" ? "l3code <DKLokeswaran@users.noreply.github.com>" : "T3 Tools",
     main: "apps/desktop/dist-electron/main.cjs",
     build: yield* createBuildConfig(
       options.platform,
@@ -3659,6 +3725,7 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
         : undefined,
       bundlesWslRuntime({ platform: options.platform, runtimeArchivePath: options.wslRuntime }),
       options.arch,
+      options.brand,
     ),
     dependencies: stageDependencies,
     devDependencies: {
@@ -3818,7 +3885,9 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   if (options.platform === "win") {
     yield* validateWindowsPackagedPayload({
       stageDistDir,
-      appExecutableName: `${resolveDesktopProductName(appVersion)}.exe`,
+      // l3code: the installed executable follows the effective product name,
+      // which a fork brand can override (mirrors createBuildConfig).
+      appExecutableName: `${options.brand.productName ?? resolveDesktopProductName(appVersion)}.exe`,
       targetArch: options.arch,
       appVersion,
       expectWslRuntime: bundlesWslRuntime({

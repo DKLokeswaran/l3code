@@ -12,9 +12,14 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import * as DesktopBrand from "./DesktopBrand.ts";
 import * as DesktopConfig from "./DesktopConfig.ts";
 import { resolveLinuxDesktopEntryName } from "./DesktopEarlyElectronStartup.ts";
-import { resolveDesktopBaseDir, resolveDesktopStateDir } from "./DesktopStatePaths.ts";
+import {
+  resolveBrandEncryptedStateFilePath,
+  resolveDesktopBaseDir,
+  resolveDesktopStateDir,
+} from "./DesktopStatePaths.ts";
 import { isNightlyDesktopVersion } from "../updates/updateChannels.ts";
 import type { OtlpProtocol } from "@t3tools/shared/observability";
 
@@ -49,6 +54,7 @@ export class DesktopEnvironment extends Context.Service<
     readonly desktopSettingsPath: string;
     readonly clientSettingsPath: string;
     readonly savedEnvironmentRegistryPath: string;
+    readonly connectionCatalogPath: string;
     readonly serverSettingsPath: string;
     readonly logDir: string;
     readonly browserArtifactsDir: string;
@@ -93,7 +99,8 @@ export class DesktopEnvironment extends Context.Service<
   }
 >()("@t3tools/desktop/app/DesktopEnvironment") {}
 
-const APP_BASE_NAME = "T3 Code";
+// Fork brand baked in at build time; stock builds keep "T3 Code" here.
+const APP_BASE_NAME = DesktopBrand.DESKTOP_BRAND_NAMES.displayBaseName;
 
 function resolveDesktopAppStageLabel(input: {
   readonly isDevelopment: boolean;
@@ -186,7 +193,9 @@ const make = Effect.fn("desktop.environment.make")(function* (
     joinPath: path.join,
     t3Home: config.t3Home,
   });
-  const userDataDirName = isDevelopment ? "t3code-dev" : "t3code";
+  const userDataDirName = isDevelopment
+    ? "t3code-dev"
+    : DesktopBrand.DESKTOP_BRAND_NAMES.userDataDirName;
   const legacyUserDataDirName = isDevelopment ? "T3 Code (Dev)" : "T3 Code (Alpha)";
   const linuxApplicationsDir = path.join(
     Option.getOrElse(config.xdgDataHome, () => path.join(homeDirectory, ".local", "share")),
@@ -210,7 +219,20 @@ const make = Effect.fn("desktop.environment.make")(function* (
     stateDir,
     desktopSettingsPath: path.join(stateDir, "desktop-settings.json"),
     clientSettingsPath: path.join(stateDir, "client-settings.json"),
-    savedEnvironmentRegistryPath: path.join(stateDir, "saved-environments.json"),
+    // Both files hold safeStorage-encrypted payloads, so each brand gets its own
+    // (see resolveBrandEncryptedStateFilePath).
+    savedEnvironmentRegistryPath: resolveBrandEncryptedStateFilePath({
+      stateDir,
+      fileName: "saved-environments.json",
+      brandSlug: DesktopBrand.DESKTOP_BRAND_NAMES.slug,
+      joinPath: path.join,
+    }),
+    connectionCatalogPath: resolveBrandEncryptedStateFilePath({
+      stateDir,
+      fileName: "connection-catalog.json",
+      brandSlug: DesktopBrand.DESKTOP_BRAND_NAMES.slug,
+      joinPath: path.join,
+    }),
     serverSettingsPath: path.join(stateDir, "settings.json"),
     logDir: path.join(stateDir, "logs"),
     browserArtifactsDir: path.join(stateDir, "browser-artifacts"),
@@ -237,10 +259,10 @@ const make = Effect.fn("desktop.environment.make")(function* (
     branding,
     displayName,
     appUserModelId: Option.getOrElse(config.appUserModelIdOverride, () =>
-      isDevelopment ? "com.t3tools.t3code.dev" : "com.t3tools.t3code",
+      isDevelopment ? "com.t3tools.t3code.dev" : DesktopBrand.DESKTOP_BRAND_NAMES.appUserModelId,
     ),
     linuxDesktopEntryName: resolveLinuxDesktopEntryName(isDevelopment),
-    linuxWmClass: isDevelopment ? "t3code-dev" : "t3code",
+    linuxWmClass: isDevelopment ? "t3code-dev" : DesktopBrand.DESKTOP_BRAND_NAMES.linuxWmClass,
     linuxApplicationsDir,
     appImagePath: config.appImagePath,
     userDataDirName,
