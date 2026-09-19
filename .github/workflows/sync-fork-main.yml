@@ -57,6 +57,16 @@ jobs:
             git merge --no-edit upstream/main
             echo "Merged upstream/main into main."
           fi
+          # merge=ours cannot catch workflow files upstream ADDED (nothing
+          # existed on our side to keep). Restore the whole directory to the
+          # pre-merge state so the push never contains upstream workflow
+          # changes the GitHub App token is not allowed to touch.
+          if ! git diff --quiet ORIG_HEAD HEAD -- .github/workflows; then
+            git rm -r -q --ignore-unmatch .github/workflows
+            git checkout ORIG_HEAD -- .github/workflows
+            git commit --amend --no-edit
+            echo "Restored fork workflow files after upstream merge."
+          fi
 
       - name: Push main
         run: git push origin HEAD:main
