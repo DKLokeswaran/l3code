@@ -39,6 +39,7 @@ jobs:
           set -euo pipefail
           git config user.name "l3code-sync[bot]"
           git config user.email "l3code-sync[bot]@users.noreply.github.com"
+          git config merge.ours.driver true
           git remote add upstream https://github.com/pingdotgg/t3code.git 2>/dev/null || true
           git fetch upstream main --tags --prune
           head_sha="$(git rev-parse HEAD)"
