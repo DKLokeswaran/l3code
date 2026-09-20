@@ -7,9 +7,14 @@ name: l3code sync
 
 on:
   schedule:
-    # 14:30 UTC (20:00 IST) crests the quiet window: sweeps up the full US
-    # workday's output in one run so the desktop build stays fresh all day.
-    - cron: "30 14 * * *"
+    # Off-peak minute values: GitHub's scheduler reliably drops crons on
+    # round times like :00 and :30, so each entry uses an asymmetrical
+    # minute and all three crest the quiet window (20:00-21:00 IST) that
+    # sweeps up the full US workday. The guard job turns the redundancy
+    # into "first success of the day runs, the rest skip".
+    - cron: "17 14 * * *"
+    - cron: "53 14 * * *"
+    - cron: "29 15 * * *"
   workflow_dispatch:
 
 permissions:
@@ -23,8 +28,29 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  guard:
+    name: Skip if a successful sync ran in the last 20 hours
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.guard.outputs.skip }}
+    steps:
+      - name: Check recent runs
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cutoff="$(date -u -d '20 hours ago' +%Y-%m-%dT%H:%M:%SZ)"
+          count="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/sync-fork-main.yml/runs?status=success&created=%3E$cutoff&per_page=1" --jq '.workflow_runs | length')"
+          if test "$count" -ne 0; then
+            echo "A successful sync ran within the last 20 hours. Skipping."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
   sync:
     name: Merge upstream/main into main
+    needs: guard
+    if: needs.guard.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -102,6 +128,15 @@ jobs:
             echo "::error::Conflict merging main into personal/main. Aborted; personal/main left untouched. Resolve it manually."
             git merge --abort
             exit 1
+          fi
+          # Bot pushes can never carry workflow-file changes, so restore
+          # fork-owned workflows to their pre-merge state before pushing
+          # (same protection the main merge job applies).
+          if ! git diff --quiet ORIG_HEAD HEAD -- .github/workflows; then
+            git rm -r -q --ignore-unmatch .github/workflows
+            git checkout ORIG_HEAD -- .github/workflows
+            git commit --amend --no-edit
+            echo "Restored fork workflow files after merge."
           fi
 
       - name: Push personal/main
