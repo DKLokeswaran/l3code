@@ -9,7 +9,7 @@ on:
   schedule:
     # 14:30 UTC (20:00 IST) crests the quiet window: sweeps up the full US
     # workday's output in one run so the desktop build stays fresh all day.
-    - cron: "30 14 * * *"
+    - cron: "17 14 * * *"
   workflow_dispatch:
 
 permissions:
