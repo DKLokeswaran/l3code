@@ -13,6 +13,11 @@
       "command": "vp i && New-Item -ItemType SymbolicLink -Path .env -Target \"$env:T3CODE_PROJECT_ROOT\\.env\" -Force && New-Item -ItemType SymbolicLink -Path \"infra\\relay\\.env\" -Target \"$env:T3CODE_PROJECT_ROOT\\infra\\relay\\.env\" -Force && node apps\\web\\scripts\\warm-dep-cache.ts",
       "icon": "configure",
       "runOnWorktreeCreate": true
+    },
+    {
+      "name": "Sync Upstream Workflows",
+      "command": "git fetch upstream; git checkout main; git merge upstream/main --no-edit; if ($LASTEXITCODE -ne 0) { Write-Host 'Merge conflicts: resolve them on main, then push main yourself.' } else { $changed = git diff --name-only ORIG_HEAD HEAD -- .github/workflows; if ($changed) { git checkout ORIG_HEAD -- .github/workflows/release-fork.yml .github/workflows/sync-fork-main.yml; git commit --amend --no-edit; Write-Host 'Restored fork workflow files into the merge commit.' }; git push origin main; git push origin main:personal/main }",
+      "icon": "configure"
     }
   ]
 }
