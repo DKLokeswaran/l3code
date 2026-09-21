@@ -9,8 +9,10 @@ is fork-owned, so it can grow freely. `AGENTS.md` cannot.
 
 ## What differs so far
 
-- CI. `.github/workflows/sync-fork-main.yml` keeps the fork in sync and `release-fork.yml` builds the fork's
-  desktop artifacts. Upstream's own workflows are untouched.
+- CI. `ci-fork.yml` runs the fork's PR checks on free GitHub-hosted runners: upstream's `ci.yml` targets paid
+  Blacksmith runners and is disabled on the fork, and its macOS-only mobile analysis job is dropped because
+  the fork ships no Apple targets. `sync-fork-main.yml` keeps the fork in sync and `release-fork.yml` builds
+  the fork's desktop artifacts. Upstream's own workflows are untouched.
 - Brand. `apps/desktop/src/app/DesktopBrand.ts`, plus the `__T3CODE_DESKTOP_BRAND_SLUG__` define in
   `apps/desktop/vite.config.ts`, let a packaged build carry its own app id, user-data directory, taskbar
   identity, and Linux desktop entry. An empty slug means stock identity, so upstream builds and dev runs are
