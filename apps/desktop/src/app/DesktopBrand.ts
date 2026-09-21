@@ -8,7 +8,7 @@
 
 declare const __T3CODE_DESKTOP_BRAND_SLUG__: string | undefined;
 
-export const DESKTOP_BRAND_SLUG: string = (() => {
+const DESKTOP_BRAND_SLUG: string = (() => {
   if (typeof __T3CODE_DESKTOP_BRAND_SLUG__ !== "string") return "t3code";
   const trimmed = __T3CODE_DESKTOP_BRAND_SLUG__.trim();
   return trimmed === "" ? "t3code" : trimmed;
