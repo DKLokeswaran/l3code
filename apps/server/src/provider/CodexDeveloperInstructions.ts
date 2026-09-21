@@ -207,11 +207,16 @@ export function buildCodexDeveloperInstructions(
    */
   browserToolsAvailable: boolean | T3CodeToolAvailability = true,
 ): string {
-  const base =
-    interactionMode === "plan"
-      ? codexPlanModeDeveloperInstructions(browserToolsAvailable)
-      : codexDefaultModeDeveloperInstructions(browserToolsAvailable);
-  return `${base}
-
+  // Fork experiment: send only runtime info and the T3 browser/device tool
+  // steering, skip the collaboration mode base. Re-enable by restoring the
+  // lines below.
+  // const base =
+  //   interactionMode === "plan"
+  //     ? codexPlanModeDeveloperInstructions(browserToolsAvailable)
+  //     : codexDefaultModeDeveloperInstructions(browserToolsAvailable);
+  // return `${base}
+  //
+  // ${buildRuntimeInstructions({ harness: "Codex", ...runtime })}`;
+  return `${browserToolInstructions(browserToolsAvailable)}
 ${buildRuntimeInstructions({ harness: "Codex", ...runtime })}`;
 }
