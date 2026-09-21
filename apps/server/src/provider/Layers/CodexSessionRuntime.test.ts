@@ -563,10 +563,10 @@ describe("buildCodexDeveloperInstructions", () => {
       reasoningEffort: "high",
     });
 
-    // Fork experiment: the collaboration mode base is not sent. The plan and
-    // default mode strings stay selected in buildCodexDeveloperInstructions'
-    // commented-out code and come back with it if the experiment reverts.
-    NodeAssert.match(instructions, /^<runtime_info>/);
+    // Fork experiment: the collaboration mode base is not sent. Browser
+    // steering comes first, matching the pre-change prompt order where it
+    // sat inside the collaboration mode block before runtime info.
+    NodeAssert.match(instructions, /^\s*## T3 Code collaborative browser/);
     NodeAssert.match(instructions, /Codex harness/);
     NodeAssert.match(instructions, /as gpt-5\.3-codex with high reasoning effort/);
     NodeAssert.doesNotMatch(instructions, /<collaboration_mode>/);
@@ -591,7 +591,7 @@ describe("buildCodexDeveloperInstructions", () => {
       reasoningEffort: "medium",
     });
 
-    NodeAssert.match(instructions, /^<runtime_info>/);
+    NodeAssert.match(instructions, /<runtime_info>/);
     NodeAssert.match(instructions, /as gpt-5\.3-codex with medium reasoning effort/);
     NodeAssert.doesNotMatch(instructions, /<collaboration_mode>/);
   });
@@ -623,16 +623,12 @@ describe("buildCodexDeveloperInstructions", () => {
 describe("T3 browser developer instructions", () => {
   const runtime = { model: "gpt-5.3-codex", reasoningEffort: "high" };
 
-  it("ignores tool availability while the collaboration mode base is disabled", () => {
-    // The availability parameter still feeds the commented-out base; once
-    // that returns, the browser-block tests return with it.
-    NodeAssert.equal(
-      buildCodexDeveloperInstructions("default", runtime, true),
+  it("keeps the browser steering but omits it when the preview tools are absent", () => {
+    NodeAssert.match(buildCodexDeveloperInstructions("default", runtime, true), /preview_open/);
+    NodeAssert.match(buildCodexDeveloperInstructions("plan", runtime, true), /preview_open/);
+    NodeAssert.doesNotMatch(
       buildCodexDeveloperInstructions("default", runtime, false),
-    );
-    NodeAssert.equal(
-      buildCodexDeveloperInstructions("plan", runtime, true),
-      buildCodexDeveloperInstructions("default", runtime, true),
+      /preview_open/,
     );
   });
 });
