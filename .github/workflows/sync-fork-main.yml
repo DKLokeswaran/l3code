@@ -4,10 +4,10 @@ name: l3code sync
 # A second job then merges `main` into `personal/main` (which kicks off the
 # fork desktop build). Because `personal/main` is protected by required
 # status checks, that merge lands through an auto-merging PR
-# (`sync/personal-main-<date>`), not a direct push. The merge is
-# all-or-nothing: on conflict it aborts and fails loudly, leaving
-# `personal/main` untouched for a manual fix; if the checks fail, the PR
-# stays open for a manual fix.
+# (`sync/personal-main-<date>`) opened and armed by a GitHub App, not a direct
+# push. The merge is all-or-nothing: on conflict it aborts and fails loudly,
+# leaving `personal/main` untouched for a manual fix; if the checks fail, the
+# PR stays open for a manual fix.
 
 on:
   schedule:
@@ -17,12 +17,10 @@ on:
   workflow_dispatch:
 
 permissions:
+  # Job 1 pushes `main`. Job 2 writes with a GitHub App token instead, which
+  # is what makes its PR trigger CI and its auto-merge cascade to
+  # release-fork.yml (GITHUB_TOKEN-authored events do neither).
   contents: write
-  # Open the sync PR and enable auto-merge on it.
-  pull-requests: write
-  # Needed to explicitly start the fork desktop build after the bot's own
-  # push (bot pushes never cascade into other workflows by themselves).
-  actions: write
 
 concurrency:
   group: sync-fork-main
@@ -83,18 +81,41 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      # A GitHub App token, not GITHUB_TOKEN, is required so the PR's checks
+      # run without an approval prompt and the auto-merge cascades to
+      # release-fork.yml. Workflows: write is needed because a sync can touch
+      # .github/workflows files.
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.APP_CLIENT_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-workflows: write
+
       - name: Checkout personal/main
         uses: actions/checkout@v6
         with:
           ref: personal/main
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Configure git identity
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          user_id="$(gh api "/users/${APP_SLUG}[bot]" --jq .id)"
+          git config user.name "${APP_SLUG}[bot]"
+          git config user.email "${user_id}+${APP_SLUG}[bot]@users.noreply.github.com"
 
       - name: Merge main into personal/main
         id: merge
         run: |
           set -euo pipefail
-          git config user.name "l3code-sync[bot]"
-          git config user.email "l3code-sync[bot]@users.noreply.github.com"
           git fetch origin main personal/main
           if git merge-base --is-ancestor origin/main HEAD; then
             echo "personal/main already contains main. Nothing to do."
@@ -117,7 +138,7 @@ jobs:
       - name: Open auto-merging PR into personal/main
         if: steps.merge.outputs.merged == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           branch="sync/personal-main-$(date -u +%Y%m%d)"
@@ -141,7 +162,7 @@ jobs:
       - name: Prune old sync branches
         if: steps.merge.outputs.merged == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           set -euo pipefail
           for stale in $(git ls-remote --heads origin 'refs/heads/sync/personal-main-*' | awk '{print $2}' | sed 's#refs/heads/##'); do
@@ -151,6 +172,5 @@ jobs:
             fi
           done
 
-      # A push to personal/main starts release-fork.yml. The auto-merge is
-      # performed by GitHub, not this job, so it should fire from that push;
-      # verify it after the first run and add an explicit dispatch if not.
+      # The app-armed auto-merge is authored by the app, not GITHUB_TOKEN, so
+      # its push to personal/main cascades into release-fork.yml.
