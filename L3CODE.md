@@ -36,6 +36,8 @@ Upstream history inside `main` is preserved deliberately, so do not rewrite it. 
 merges `main` into `personal/main`. The merge is all-or-nothing. On conflict the job aborts and leaves
 `personal/main` untouched for a manual fix.
 
+Merge commits for sync/upstream PRs (preserve upstream history), squash for fork-work PRs.
+
 A push to `personal/main` starts the fork's release train, which publishes Windows and Debian desktop builds to
 this fork's releases as `0.YYYYMMDD.RUN_NUMBER`. The in-app updater watches those releases, so even a docs-only
 push cuts a build.

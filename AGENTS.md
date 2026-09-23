@@ -1,8 +1,9 @@
 # T3 Code
 
-> **This checkout is l3code, a personal fork of T3 Code; see [L3CODE.md](./L3CODE.md).** Everything below is
-> upstream's guidance and still applies. Fork rules in short: keep diffs minimal and localized, prefer new
-> fork-owned files over edits to upstream-owned files, and commit to `personal/main`, never to `main`.
+> **This checkout is l3code, a personal fork of T3 Code; read [L3CODE.md](./L3CODE.md) first, before doing
+> anything in this repo.** Everything below is upstream's guidance and still applies. Fork rules in short:
+> keep diffs minimal and localized, prefer new fork-owned files over edits to upstream-owned files, and
+> commit to `personal/main`, never to `main`.
 
 T3 Code is a minimal GUI for coding agents. A Node WebSocket server wraps provider CLIs and agents (Codex, Claude Code, Cursor, Grok, OpenCode, Antigravity) and serves web, desktop, and mobile clients.
 
