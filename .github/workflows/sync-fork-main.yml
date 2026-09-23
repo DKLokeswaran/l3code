@@ -2,8 +2,12 @@ name: l3code sync
 
 # Keeps l3code `main` tracking pingdotgg/t3code `main` with a daily merge.
 # A second job then merges `main` into `personal/main` (which kicks off the
-# fork desktop build). The merge is all-or-nothing: on conflict it aborts
-# and fails loudly, leaving `personal/main` untouched for a manual fix.
+# fork desktop build). Because `personal/main` is protected by required
+# status checks, that merge lands through an auto-merging PR
+# (`sync/personal-main-<date>`), not a direct push. The merge is
+# all-or-nothing: on conflict it aborts and fails loudly, leaving
+# `personal/main` untouched for a manual fix; if the checks fail, the PR
+# stays open for a manual fix.
 
 on:
   schedule:
@@ -14,6 +18,8 @@ on:
 
 permissions:
   contents: write
+  # Open the sync PR and enable auto-merge on it.
+  pull-requests: write
   # Needed to explicitly start the fork desktop build after the bot's own
   # push (bot pushes never cascade into other workflows by themselves).
   actions: write
@@ -72,7 +78,7 @@ jobs:
         run: git push origin HEAD:main
 
   merge-personal:
-    name: Merge main into personal/main
+    name: Merge main into personal/main via auto-merging PR
     needs: sync
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -104,15 +110,47 @@ jobs:
             exit 1
           fi
 
-      - name: Push personal/main
-        if: steps.merge.outputs.merged == 'true'
-        run: git push origin HEAD:personal/main
-
-      # Bot pushes never cascade into other workflows, so start the fork
-      # desktop build explicitly. Human pushes to personal/main still build
-      # through release-fork.yml's own push trigger; this only covers the bot.
-      - name: Trigger fork desktop build
+      # personal/main requires status checks, so the merge cannot be pushed to
+      # it directly. Push it to a throwaway branch and land it through a PR
+      # that auto-merges once the required checks pass. A merge commit (not a
+      # squash) preserves upstream history.
+      - name: Open auto-merging PR into personal/main
         if: steps.merge.outputs.merged == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run release-fork.yml --ref personal/main
+        run: |
+          set -euo pipefail
+          branch="sync/personal-main-$(date -u +%Y%m%d)"
+          git push --force origin "HEAD:refs/heads/$branch"
+          pr_number="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          if test -n "$pr_number"; then
+            echo "Reusing open PR #$pr_number for $branch."
+          else
+            pr_url="$(gh pr create \
+              --base personal/main \
+              --head "$branch" \
+              --title "chore(sync): merge main into personal/main" \
+              --body "Automated daily sync. Merges \`main\` into \`personal/main\` with a merge commit so upstream history is preserved. Auto-merges once the required status checks pass; stays open for a manual fix if they fail.")"
+            pr_number="${pr_url##*/}"
+          fi
+          gh pr merge "$pr_number" --merge --auto
+
+      # gh leaves the head branch behind when it enables auto-merge (it only
+      # deletes on an immediate merge), so prune sync branches from earlier
+      # runs whose PR is already merged or closed.
+      - name: Prune old sync branches
+        if: steps.merge.outputs.merged == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for stale in $(git ls-remote --heads origin 'refs/heads/sync/personal-main-*' | awk '{print $2}' | sed 's#refs/heads/##'); do
+            if test -z "$(gh pr list --head "$stale" --state open --json number --jq '.[0].number // empty')"; then
+              echo "Deleting stale branch $stale."
+              git push origin --delete "$stale"
+            fi
+          done
+
+      # A push to personal/main starts release-fork.yml. The auto-merge is
+      # performed by GitHub, not this job, so it should fire from that push;
+      # verify it after the first run and add an explicit dispatch if not.
